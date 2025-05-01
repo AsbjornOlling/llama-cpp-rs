@@ -313,7 +313,9 @@ pub enum ApplyChatTemplateError {
 ///
 /// ```
 /// # use std::time::Duration;
+/// # use llama_cpp_2::llama_backend::LlamaBackend;
 /// use llama_cpp_2::ggml_time_us;
+/// let backend = LlamaBackend::init().unwrap();
 ///
 /// let start = ggml_time_us();
 ///
