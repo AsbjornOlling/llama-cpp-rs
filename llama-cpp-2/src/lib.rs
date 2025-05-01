@@ -217,7 +217,8 @@ pub enum LlamaLoraAdapterRemoveError {
 /// get the time (in microseconds) according to llama.cpp
 /// ```
 /// # use llama_cpp_2::llama_time_us;
-/// let backend = llama_backend::LlamaBackend::init().unwrap();
+/// # use llama_cpp_2::llama_backend::LlamaBackend;
+/// let backend = LlamaBackend::init().unwrap();
 /// let time = llama_time_us();
 /// assert!(time > 0);
 /// ```
