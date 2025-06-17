@@ -35,7 +35,7 @@ include = [
     # copy within the target directory. An alternative, if we do want to capture build-info.cpp
     # within the package would be to change the CI task to add `--allow-dirty` to the package
     # command.
-    "!/llama.cpp/common/build-info.cpp",
+    "/llama.cpp/common/build-info.cpp",
     "/llama.cpp/common/build-info.cpp.in",
 
     "/llama.cpp/ggml/src/ggml-cuda.cu",
