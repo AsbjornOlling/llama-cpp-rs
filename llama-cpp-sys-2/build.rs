@@ -356,6 +356,12 @@ fn main() {
                 let vulkan_lib_path = Path::new(&vulkan_path).join("Lib");
                 println!("cargo:rustc-link-search={}", vulkan_lib_path.display());
                 println!("cargo:rustc-link-lib=vulkan-1");
+
+                // workaround for this error
+                // FileTracker : error FTK1011: could not create the new file tracking log file
+                // the issue is likely caused by nested cmake projects with ExternalProject_Add
+                // and windows' FileTracker thingy not properly picking up the inherited dir config
+                config.define("CMAKE_VS_GLOBALS", "TrackFileAccess=false");
             }
             TargetOs::Linux => {
                 println!("cargo:rustc-link-lib=vulkan");
