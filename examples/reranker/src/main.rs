@@ -45,6 +45,9 @@ struct Args {
     /// Whether to normalise the produced embeddings
     #[clap(long, default_value_t = true)]
     normalise: bool,
+
+    #[clap(long, default_value_t = false)]
+    disable_gpu: bool,
 }
 
 fn main() -> Result<()> {
@@ -54,6 +57,7 @@ fn main() -> Result<()> {
         documents,
         pooling,
         normalise,
+        disable_gpu,
     } = Args::parse();
 
     // init LLM
