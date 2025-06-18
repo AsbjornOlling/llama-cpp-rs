@@ -9,6 +9,7 @@ use crate::llama_batch::LlamaBatch;
 use crate::model::{LlamaLoraAdapter, LlamaModel};
 use crate::timing::LlamaTimings;
 use crate::token::data::LlamaTokenData;
+use crate::token::data_array::LlamaTokenDataArray;
 use crate::token::LlamaToken;
 use crate::{
     DecodeError, EmbeddingsError, EncodeError, LlamaLoraAdapterRemoveError,
@@ -17,7 +18,6 @@ use crate::{
 
 pub mod kv_cache;
 pub mod params;
-pub mod sample;
 pub mod session;
 
 /// Safe wrapper around `llama_context`.
@@ -52,13 +52,13 @@ impl<'model> LlamaContext<'model> {
         }
     }
 
-    /// Gets the max number of logical tokens that can be submitted to decode. Must be greater than or equal to n_ubatch.
+    /// Gets the max number of logical tokens that can be submitted to decode. Must be greater than or equal to [`Self::n_ubatch`].
     #[must_use]
     pub fn n_batch(&self) -> u32 {
         unsafe { llama_cpp_sys_2::llama_n_batch(self.context.as_ptr()) }
     }
 
-    /// Gets the max number of physical tokens (hardware level) to decode in batch. Must be less than or equal to n_batch.
+    /// Gets the max number of physical tokens (hardware level) to decode in batch. Must be less than or equal to [`Self::n_batch`].
     #[must_use]
     pub fn n_ubatch(&self) -> u32 {
         unsafe { llama_cpp_sys_2::llama_n_ubatch(self.context.as_ptr()) }
@@ -203,6 +203,21 @@ impl<'model> LlamaContext<'model> {
         })
     }
 
+    /// Get the token data array for the last token in the context.
+    ///
+    /// This is a convience method that implements:
+    /// ```ignore
+    /// LlamaTokenDataArray::from_iter(ctx.candidates(), false)
+    /// ```
+    ///
+    /// # Panics
+    ///
+    /// - underlying logits data is null
+    #[must_use]
+    pub fn token_data_array(&self) -> LlamaTokenDataArray {
+        LlamaTokenDataArray::from_iter(self.candidates(), false)
+    }
+
     /// Token logits obtained from the last call to `decode()`.
     /// The logits for which `batch.logits[i] != 0` are stored contiguously
     /// in the order they have appeared in the batch.
@@ -218,6 +233,7 @@ impl<'model> LlamaContext<'model> {
     ///
     /// - `n_vocab` does not fit into a usize
     /// - token data returned is null
+    #[must_use]
     pub fn get_logits(&self) -> &[f32] {
         let data = unsafe { llama_cpp_sys_2::llama_get_logits(self.context.as_ptr()) };
         assert!(!data.is_null(), "logits data for last token is null");
@@ -236,6 +252,21 @@ impl<'model> LlamaContext<'model> {
             let token = LlamaToken::new(i);
             LlamaTokenData::new(token, *logit, 0_f32)
         })
+    }
+
+    /// Get the token data array for the ith token in the context.
+    ///
+    /// This is a convience method that implements:
+    /// ```ignore
+    /// LlamaTokenDataArray::from_iter(ctx.candidates_ith(i), false)
+    /// ```
+    ///
+    /// # Panics
+    ///
+    /// - logit `i` is not initialized.
+    #[must_use]
+    pub fn token_data_array_ith(&self, i: i32) -> LlamaTokenDataArray {
+        LlamaTokenDataArray::from_iter(self.candidates_ith(i), false)
     }
 
     /// Get the logits for the ith token in the context.
@@ -267,12 +298,12 @@ impl<'model> LlamaContext<'model> {
 
     /// Reset the timings for the context.
     pub fn reset_timings(&mut self) {
-        unsafe { llama_cpp_sys_2::llama_reset_timings(self.context.as_ptr()) }
+        unsafe { llama_cpp_sys_2::llama_perf_context_reset(self.context.as_ptr()) }
     }
 
     /// Returns the timings for the context.
     pub fn timings(&mut self) -> LlamaTimings {
-        let timings = unsafe { llama_cpp_sys_2::llama_get_timings(self.context.as_ptr()) };
+        let timings = unsafe { llama_cpp_sys_2::llama_perf_context(self.context.as_ptr()) };
         LlamaTimings { timings }
     }
 
@@ -287,7 +318,7 @@ impl<'model> LlamaContext<'model> {
         scale: f32,
     ) -> Result<(), LlamaLoraAdapterSetError> {
         let err_code = unsafe {
-            llama_cpp_sys_2::llama_lora_adapter_set(
+            llama_cpp_sys_2::llama_set_adapter_lora(
                 self.context.as_ptr(),
                 adapter.lora_adapter.as_ptr(),
                 scale,
@@ -311,7 +342,7 @@ impl<'model> LlamaContext<'model> {
         adapter: &mut LlamaLoraAdapter,
     ) -> Result<(), LlamaLoraAdapterRemoveError> {
         let err_code = unsafe {
-            llama_cpp_sys_2::llama_lora_adapter_remove(
+            llama_cpp_sys_2::llama_rm_adapter_lora(
                 self.context.as_ptr(),
                 adapter.lora_adapter.as_ptr(),
             )
