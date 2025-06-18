@@ -366,11 +366,9 @@ fn main() {
                 env::set_var("TrackFileAccess", "false");
 
                 // since we disabled TrackFileAccess, we can now run into problems with parallel
-                // access to build files. /FS solves this.
-                let existing_cflags = std::env::var("CFLAGS").unwrap_or_default();
-                std::env::set_var("CFLAGS", format!("{} /FS", existing_cflags).trim());
-                let existing_cxxflags = std::env::var("CXXFLAGS").unwrap_or_default();
-                std::env::set_var("CXXFLAGS", format!("{} /FS", existing_cxxflags).trim());
+                // access to pdb files. /FS solves this.
+                config.cflag("/FS");
+                config.cxxflag("/FS");
             }
             TargetOs::Linux => {
                 println!("cargo:rustc-link-lib=vulkan");
