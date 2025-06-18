@@ -361,11 +361,11 @@ fn main() {
                 // FileTracker : error FTK1011: could not create the new file tracking log file
                 // the issue is likely caused by nested cmake projects with ExternalProject_Add
                 // and windows' FileTracker thingy not properly picking up the inherited dir config
-                config.define(
-                    "CMAKE_VS_GLOBALS",
-                    "TrackFileAccess=false;UseMultiToolTask=false",
-                );
-                env::set_var("UseMultiToolTask", "false");
+                // config.define(
+                //     "CMAKE_VS_GLOBALS",
+                //     "TrackFileAccess=false;UseMultiToolTask=false",
+                // );
+                // env::set_var("UseMultiToolTask", "false");
                 env::set_var("TrackFileAccess", "false");
             }
             TargetOs::Linux => {
