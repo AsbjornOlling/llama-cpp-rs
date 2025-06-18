@@ -23,10 +23,11 @@ use std::path::PathBuf;
 use std::string::FromUtf8Error;
 
 pub mod context;
-pub mod grammar;
 pub mod llama_backend;
 pub mod llama_batch;
+mod log;
 pub mod model;
+pub mod sampling;
 pub mod timing;
 pub mod token;
 pub mod token_type;
@@ -62,20 +63,39 @@ pub enum LLamaCppError {
     /// see [`EmbeddingsError`]
     #[error(transparent)]
     EmbeddingError(#[from] EmbeddingsError),
+    // See [`LlamaSamplerError`]
 }
 
 /// There was an error while getting the chat template from a model.
 #[derive(Debug, Eq, PartialEq, thiserror::Error)]
 pub enum ChatTemplateError {
-    /// the buffer was too small.
-    #[error("The buffer was too small. However, a buffer size of {0} would be just large enough.")]
-    BuffSizeError(usize),
-    /// gguf has no chat template
-    #[error("the model has no meta val - returned code {0}")]
-    MissingTemplate(i32),
+    /// gguf has no chat template (by that name)
+    #[error("chat template not found - returned null pointer")]
+    MissingTemplate,
+
+    /// chat template contained a null byte
+    #[error("null byte in string {0}")]
+    NullError(#[from] NulError),
+
     /// The chat template was not valid utf8.
     #[error(transparent)]
     Utf8Error(#[from] std::str::Utf8Error),
+}
+
+/// Failed fetching metadata value
+#[derive(Debug, Eq, PartialEq, thiserror::Error)]
+pub enum MetaValError {
+    /// The provided string contains an unexpected null-byte
+    #[error("null byte in string {0}")]
+    NullError(#[from] NulError),
+
+    /// The returned data contains invalid UTF8 data
+    #[error("FromUtf8Error {0}")]
+    FromUtf8Error(#[from] FromUtf8Error),
+
+    /// Got negative return value. This happens if the key or index queried does not exist.
+    #[error("Negative return value. Likely due to a missing index or key. Got return value: {0}")]
+    NegativeReturn(i32),
 }
 
 /// Failed to Load context
@@ -197,6 +217,8 @@ pub enum LlamaLoraAdapterRemoveError {
 /// get the time (in microseconds) according to llama.cpp
 /// ```
 /// # use llama_cpp_2::llama_time_us;
+/// # use llama_cpp_2::llama_backend::LlamaBackend;
+/// let backend = LlamaBackend::init().unwrap();
 /// let time = llama_time_us();
 /// assert!(time > 0);
 /// ```
@@ -279,9 +301,6 @@ pub enum NewLlamaChatMessageError {
 /// Failed to apply model chat template.
 #[derive(Debug, thiserror::Error)]
 pub enum ApplyChatTemplateError {
-    /// the buffer was too small.
-    #[error("The buffer was too small. Please contact a maintainer and we will update it.")]
-    BuffSizeError,
     /// the string contained a null byte and thus could not be converted to a c string.
     #[error("{0}")]
     NulError(#[from] NulError),
@@ -294,6 +313,8 @@ pub enum ApplyChatTemplateError {
 ///
 /// ```
 /// # use std::time::Duration;
+/// # use llama_cpp_2::llama_backend::LlamaBackend;
+/// let backend = LlamaBackend::init().unwrap();
 /// use llama_cpp_2::ggml_time_us;
 ///
 /// let start = ggml_time_us();
@@ -324,4 +345,77 @@ pub fn ggml_time_us() -> i64 {
 #[must_use]
 pub fn llama_supports_mlock() -> bool {
     unsafe { llama_cpp_sys_2::llama_supports_mlock() }
+}
+
+/// Options to configure how llama.cpp logs are intercepted.
+#[derive(Default, Debug, Clone)]
+pub struct LogOptions {
+    disabled: bool,
+}
+
+impl LogOptions {
+    /// If enabled, logs are sent to tracing. If disabled, all logs are suppressed. Default is for
+    /// logs to be sent to tracing.
+    pub fn with_logs_enabled(mut self, enabled: bool) -> Self {
+        self.disabled = !enabled;
+        self
+    }
+}
+
+extern "C" fn logs_to_trace(
+    level: llama_cpp_sys_2::ggml_log_level,
+    text: *const ::std::os::raw::c_char,
+    data: *mut ::std::os::raw::c_void,
+) {
+    // In the "fast-path" (i.e. the vast majority of logs) we want to avoid needing to take the log state
+    // lock at all. Similarly, we try to avoid any heap allocations within this function. This is accomplished
+    // by being a dummy pass-through to tracing in the normal case of DEBUG/INFO/WARN/ERROR logs that are
+    // newline terminated and limiting the slow-path of locks and/or heap allocations for other cases.
+    use std::borrow::Borrow;
+
+    let log_state = unsafe { &*(data as *const log::State) };
+
+    let text = unsafe { std::ffi::CStr::from_ptr(text) };
+    let text = text.to_string_lossy();
+    let text: &str = text.borrow();
+
+    if log_state.options.disabled {
+        return;
+    }
+
+    // As best I can tell llama.cpp / ggml require all log format strings at call sites to have the '\n'.
+    // If it's missing, it means that you expect more logs via CONT (or there's a typo in the codebase). To
+    // distinguish typo from intentional support for CONT, we have to buffer until the next message comes in
+    // to know how to flush it.
+
+    if level == llama_cpp_sys_2::GGML_LOG_LEVEL_CONT {
+        log_state.cont_buffered_log(text);
+    } else if text.ends_with('\n') {
+        log_state.emit_non_cont_line(level, text);
+    } else {
+        log_state.buffer_non_cont(level, text);
+    }
+}
+
+/// Redirect llama.cpp logs into tracing.
+pub fn send_logs_to_tracing(options: LogOptions) {
+    // TODO: Reinitialize the state to support calling send_logs_to_tracing multiple times.
+
+    // We set up separate log states for llama.cpp and ggml to make sure that CONT logs between the two
+    // can't possibly interfere with each other. In other words, if llama.cpp emits a log without a trailing
+    // newline and calls a GGML function, the logs won't be weirdly intermixed and instead we'll llama.cpp logs
+    // will CONT previous llama.cpp logs and GGML logs will CONT previous ggml logs.
+    let llama_heap_state = Box::as_ref(
+        log::LLAMA_STATE
+            .get_or_init(|| Box::new(log::State::new(log::Module::LlamaCpp, options.clone()))),
+    ) as *const _;
+    let ggml_heap_state = Box::as_ref(
+        log::GGML_STATE.get_or_init(|| Box::new(log::State::new(log::Module::GGML, options))),
+    ) as *const _;
+
+    unsafe {
+        // GGML has to be set after llama since setting llama sets ggml as well.
+        llama_cpp_sys_2::llama_log_set(Some(logs_to_trace), llama_heap_state as *mut _);
+        llama_cpp_sys_2::ggml_log_set(Some(logs_to_trace), ggml_heap_state as *mut _);
+    }
 }
