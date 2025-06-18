@@ -364,6 +364,13 @@ fn main() {
                 // limit configuration set in the windows registry. I'm not sure which, but this
                 // makes my builds work.
                 env::set_var("TrackFileAccess", "false");
+
+                // since we disabled TrackFileAccess, we can now run into problems with parallel
+                // access to build files. /FS solves this.
+                let existing_cflags = std::env::var("CFLAGS").unwrap_or_default();
+                std::env::set_var("CFLAGS", format!("{} /FS", existing_cflags).trim());
+                let existing_cxxflags = std::env::var("CXXFLAGS").unwrap_or_default();
+                std::env::set_var("CXXFLAGS", format!("{} /FS", existing_cxxflags).trim());
             }
             TargetOs::Linux => {
                 println!("cargo:rustc-link-lib=vulkan");
