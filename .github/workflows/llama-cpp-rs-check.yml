@@ -101,8 +101,8 @@ jobs:
           stripdown: true
       - name: Disable MSBuild FileTracker
         run: |
-          echo "MSBUILDDISABLEREGISTRYEXPANSION=1" >> $env:GITHUB_ENV
-          echo "UseMultiToolTask=true" >> $env:GITHUB_ENV
+          echo "MSBUILDDISABLENODEREUSE=1" >> $env:GITHUB_ENV
+          echo "TRACKER_DISABLE_TRACKER=1" >> $env:GITHUB_ENV
       - name: Check LongPathsEnabled
         run: |
           (Get-ItemProperty "HKLM:System\CurrentControlSet\Control\FileSystem").LongPathsEnabled
