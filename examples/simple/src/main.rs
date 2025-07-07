@@ -10,14 +10,15 @@ use anyhow::{anyhow, bail, Context, Result};
 use clap::Parser;
 use hf_hub::api::sync::ApiBuilder;
 use llama_cpp_2::context::params::LlamaContextParams;
-use llama_cpp_2::ggml_time_us;
 use llama_cpp_2::llama_backend::LlamaBackend;
 use llama_cpp_2::llama_batch::LlamaBatch;
 use llama_cpp_2::model::params::kv_overrides::ParamOverrideValue;
 use llama_cpp_2::model::params::LlamaModelParams;
 use llama_cpp_2::model::LlamaModel;
 use llama_cpp_2::model::{AddBos, Special};
-use llama_cpp_2::token::data_array::LlamaTokenDataArray;
+use llama_cpp_2::sampling::LlamaSampler;
+use llama_cpp_2::{ggml_time_us, send_logs_to_tracing, LogOptions};
+
 use std::ffi::CString;
 use std::io::Write;
 use std::num::NonZeroU32;
@@ -66,6 +67,8 @@ struct Args {
         help = "size of the prompt context (default: loaded from themodel)"
     )]
     ctx_size: Option<NonZeroU32>,
+    #[arg(short = 'v', long, help = "enable verbose llama.cpp logs")]
+    verbose: bool,
 }
 
 /// Parse a single key-value pair
@@ -131,7 +134,13 @@ fn main() -> Result<()> {
         threads,
         threads_batch,
         ctx_size,
+        verbose,
     } = Args::parse();
+
+    if verbose {
+        tracing_subscriber::fmt().init();
+    }
+    send_logs_to_tracing(LogOptions::default().with_logs_enabled(verbose));
 
     // init LLM
     let backend = LlamaBackend::init()?;
@@ -174,9 +183,9 @@ fn main() -> Result<()> {
         .with_context(|| "unable to load model")?;
 
     // initialize the context
-    let mut ctx_params = LlamaContextParams::default()
-        .with_n_ctx(ctx_size.or(Some(NonZeroU32::new(2048).unwrap())))
-        .with_seed(seed.unwrap_or(1234));
+    let mut ctx_params =
+        LlamaContextParams::default().with_n_ctx(ctx_size.or(Some(NonZeroU32::new(2048).unwrap())));
+
     if let Some(threads) = threads {
         ctx_params = ctx_params.with_n_threads(threads);
     }
@@ -244,23 +253,25 @@ either reduce n_len or increase n_ctx"
     // The `Decoder`
     let mut decoder = encoding_rs::UTF_8.new_decoder();
 
+    let mut sampler = LlamaSampler::chain_simple([
+        LlamaSampler::dist(seed.unwrap_or(1234)),
+        LlamaSampler::greedy(),
+    ]);
+
     while n_cur <= n_len {
         // sample the next token
         {
-            let candidates = ctx.candidates();
+            let token = sampler.sample(&ctx, batch.n_tokens() - 1);
 
-            let candidates_p = LlamaTokenDataArray::from_iter(candidates, false);
-
-            // sample the most likely token
-            let new_token_id = ctx.sample_token_greedy(candidates_p);
+            sampler.accept(token);
 
             // is it an end of stream?
-            if model.is_eog_token(new_token_id) {
+            if model.is_eog_token(token) {
                 eprintln!();
                 break;
             }
 
-            let output_bytes = model.token_to_bytes(new_token_id, Special::Tokenize)?;
+            let output_bytes = model.token_to_bytes(token, Special::Tokenize)?;
             // use `Decoder.decode_to_string()` to avoid the intermediate buffer
             let mut output_string = String::with_capacity(32);
             let _decode_result = decoder.decode_to_string(&output_bytes, &mut output_string, false);
@@ -268,7 +279,7 @@ either reduce n_len or increase n_ctx"
             std::io::stdout().flush()?;
 
             batch.clear();
-            batch.add(new_token_id, n_cur, &[0], true)?;
+            batch.add(token, n_cur, &[0], true)?;
         }
 
         n_cur += 1;
