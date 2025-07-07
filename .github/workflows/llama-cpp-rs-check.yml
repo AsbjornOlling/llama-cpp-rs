@@ -100,4 +100,4 @@ jobs:
           cache: true
           stripdown: true
       - name: Build
-        run: cargo build --features "sampler vulkan"
+        run: cargo build --features "sampler vulkan" --verbose
